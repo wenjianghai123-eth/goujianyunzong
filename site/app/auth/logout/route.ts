@@ -12,10 +12,9 @@ export async function GET(request: Request) {
   const cookieStore = await cookies();
   const rawToken = cookieStore.get(SESSION_COOKIE)?.value;
   if (rawToken) {
-    await authDatabase()
-      .prepare(`DELETE FROM auth_sessions WHERE id = ?`)
-      .bind(await hashToken(rawToken))
-      .run();
+    await authDatabase().execute(`DELETE FROM auth_sessions WHERE id = $1`, [
+      await hashToken(rawToken),
+    ]);
   }
   const requestUrl = new URL(request.url);
   return new Response(null, {

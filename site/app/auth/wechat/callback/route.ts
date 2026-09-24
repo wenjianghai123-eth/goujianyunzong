@@ -31,12 +31,10 @@ export async function GET(request: Request) {
   const state = requestUrl.searchParams.get('state');
   if (!state) return loginError(requestUrl, 'invalid_state');
 
-  const consumed = await authDatabase()
-    .prepare(
-      `DELETE FROM oauth_states WHERE id = ? AND expires_at > ? RETURNING return_to AS returnTo`,
-    )
-    .bind(state, new Date().toISOString())
-    .first<{ returnTo: string }>();
+  const consumed = await authDatabase().one<{ returnTo: string }>(
+    `DELETE FROM oauth_states WHERE id = $1 AND expires_at > $2 RETURNING return_to AS "returnTo"`,
+    [state, new Date().toISOString()],
+  );
   if (!consumed) return loginError(requestUrl, 'invalid_state');
   if (!code)
     return loginError(requestUrl, 'wechat_cancelled', consumed.returnTo);
@@ -75,17 +73,16 @@ export async function GET(request: Request) {
     const avatarUrl = String(profile.headimgurl || '').slice(0, 500);
     const now = new Date();
     const newUserId = `wechat:${unionid || openid}`;
-    await authDatabase()
-      .prepare(`
-      INSERT INTO auth_users (id, wechat_openid, wechat_unionid, display_name, avatar_url, created_at, last_login_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(wechat_openid) DO UPDATE SET
-        wechat_unionid = excluded.wechat_unionid,
-        display_name = excluded.display_name,
-        avatar_url = excluded.avatar_url,
-        last_login_at = excluded.last_login_at
-    `)
-      .bind(
+    const user = await authDatabase().one<{ id: string }>(`
+        INSERT INTO auth_users (id, wechat_openid, wechat_unionid, display_name, avatar_url, created_at, last_login_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT(wechat_openid) DO UPDATE SET
+          wechat_unionid = excluded.wechat_unionid,
+          display_name = excluded.display_name,
+          avatar_url = excluded.avatar_url,
+          last_login_at = excluded.last_login_at
+        RETURNING id
+      `, [
         newUserId,
         openid,
         unionid,
@@ -93,12 +90,7 @@ export async function GET(request: Request) {
         avatarUrl,
         now.toISOString(),
         now.toISOString(),
-      )
-      .run();
-    const user = await authDatabase()
-      .prepare(`SELECT id FROM auth_users WHERE wechat_openid = ?`)
-      .bind(openid)
-      .first<{ id: string }>();
+      ]);
     if (!user) throw new Error('微信账号写入失败');
 
     const rawSession = randomToken();
@@ -106,16 +98,15 @@ export async function GET(request: Request) {
     const expiresAt = new Date(
       now.getTime() + SESSION_MAX_AGE_SECONDS * 1000,
     ).toISOString();
-    await authDatabase().batch([
-      authDatabase()
-        .prepare(`DELETE FROM auth_sessions WHERE expires_at <= ?`)
-        .bind(now.toISOString()),
-      authDatabase()
-        .prepare(
-          `INSERT INTO auth_sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
-        )
-        .bind(sessionId, user.id, now.toISOString(), expiresAt),
-    ]);
+    await authDatabase().transaction(async (tx) => {
+      await tx.execute(`DELETE FROM auth_sessions WHERE expires_at <= $1`, [
+        now.toISOString(),
+      ]);
+      await tx.execute(
+        `INSERT INTO auth_sessions (id, user_id, created_at, expires_at) VALUES ($1, $2, $3, $4)`,
+        [sessionId, user.id, now.toISOString(), expiresAt],
+      );
+    });
     return new Response(null, {
       status: 302,
       headers: {

@@ -1,17 +1,9 @@
-import { env } from 'cloudflare:workers';
+import { database } from '@/db';
 import { getCurrentUser } from '@/lib/app-auth';
 
+export { database } from '@/db';
+
 export type Actor = { userId: string; email: string; displayName: string };
-
-export function database(): D1Database {
-  if (!env.DB) throw new Error('数据库暂不可用');
-  return env.DB;
-}
-
-export function files(): R2Bucket {
-  if (!env.FILES) throw new Error('文件存储暂不可用');
-  return env.FILES;
-}
 
 export async function requireActor(): Promise<Actor> {
   const user = await getCurrentUser();
@@ -31,12 +23,10 @@ export async function requireProjectAccess(
   projectId: string,
   mode: 'read' | 'write' | 'admin' = 'read',
 ) {
-  const membership = await database()
-    .prepare(
-      `SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`,
-    )
-    .bind(projectId, actor.userId)
-    .first<{ role: string }>();
+  const membership = await database().one<{ role: string }>(
+    `SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2`,
+    [projectId, actor.userId],
+  );
   if (!membership) throw new HttpError(403, '你没有该项目的访问权限');
   const writeRoles = new Set([
     'PROJECT_ADMIN',
@@ -97,8 +87,12 @@ export function cleanText(value: unknown, max = 200) {
 }
 
 export function requestMeta(request: Request) {
+  const forwardedFor = request.headers.get('x-forwarded-for');
   return {
-    ip: request.headers.get('cf-connecting-ip') ?? '',
+    ip:
+      forwardedFor?.split(',')[0]?.trim() ||
+      request.headers.get('x-real-ip') ||
+      '',
     userAgent: (request.headers.get('user-agent') ?? '').slice(0, 500),
   };
 }

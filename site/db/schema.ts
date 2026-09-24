@@ -1,12 +1,13 @@
 import {
+  boolean,
   index,
   integer,
-  sqliteTable,
+  pgTable,
   text,
   uniqueIndex,
-} from 'drizzle-orm/sqlite-core';
+} from 'drizzle-orm/pg-core';
 
-export const authUsers = sqliteTable(
+export const authUsers = pgTable(
   'auth_users',
   {
     id: text('id').primaryKey(),
@@ -23,7 +24,7 @@ export const authUsers = sqliteTable(
   ],
 );
 
-export const authSessions = sqliteTable(
+export const authSessions = pgTable(
   'auth_sessions',
   {
     id: text('id').primaryKey(),
@@ -39,7 +40,7 @@ export const authSessions = sqliteTable(
   ],
 );
 
-export const oauthStates = sqliteTable(
+export const oauthStates = pgTable(
   'oauth_states',
   {
     id: text('id').primaryKey(),
@@ -50,7 +51,7 @@ export const oauthStates = sqliteTable(
   (table) => [index('idx_oauth_states_expires').on(table.expiresAt)],
 );
 
-export const projects = sqliteTable(
+export const projects = pgTable(
   'projects',
   {
     id: text('id').primaryKey(),
@@ -59,10 +60,10 @@ export const projects = sqliteTable(
     address: text('address').notNull().default(''),
     owner: text('owner').notNull().default(''),
     status: text('status').notNull().default('ACTIVE'),
-    requireOnsitePhoto: integer('require_onsite_photo', { mode: 'boolean' })
+    requireOnsitePhoto: boolean('require_onsite_photo')
       .notNull()
       .default(true),
-    requireCompletePhoto: integer('require_complete_photo', { mode: 'boolean' })
+    requireCompletePhoto: boolean('require_complete_photo')
       .notNull()
       .default(true),
     createdAt: text('created_at').notNull(),
@@ -71,7 +72,7 @@ export const projects = sqliteTable(
   (table) => [uniqueIndex('uq_projects_code').on(table.code)],
 );
 
-export const projectMembers = sqliteTable(
+export const projectMembers = pgTable(
   'project_members',
   {
     id: text('id').primaryKey(),
@@ -93,7 +94,7 @@ export const projectMembers = sqliteTable(
   ],
 );
 
-export const componentEntryGroups = sqliteTable(
+export const componentEntryGroups = pgTable(
   'component_entry_groups',
   {
     id: text('id').primaryKey(),
@@ -127,7 +128,7 @@ export const componentEntryGroups = sqliteTable(
   ],
 );
 
-export const components = sqliteTable(
+export const components = pgTable(
   'components',
   {
     id: text('id').primaryKey(),
@@ -177,7 +178,7 @@ export const components = sqliteTable(
   ],
 );
 
-export const arrivalBatches = sqliteTable(
+export const arrivalBatches = pgTable(
   'arrival_batches',
   {
     id: text('id').primaryKey(),
@@ -218,7 +219,7 @@ export const arrivalBatches = sqliteTable(
   ],
 );
 
-export const arrivalBatchItems = sqliteTable(
+export const arrivalBatchItems = pgTable(
   'arrival_batch_items',
   {
     id: text('id').primaryKey(),
@@ -241,7 +242,7 @@ export const arrivalBatchItems = sqliteTable(
   ],
 );
 
-export const progressRecords = sqliteTable(
+export const progressRecords = pgTable(
   'progress_records',
   {
     id: text('id').primaryKey(),
@@ -271,7 +272,7 @@ export const progressRecords = sqliteTable(
   ],
 );
 
-export const milestones = sqliteTable(
+export const milestones = pgTable(
   'milestones',
   {
     id: text('id').primaryKey(),
@@ -296,7 +297,7 @@ export const milestones = sqliteTable(
   ],
 );
 
-export const photos = sqliteTable(
+export const photos = pgTable(
   'photos',
   {
     id: text('id').primaryKey(),
@@ -322,7 +323,7 @@ export const photos = sqliteTable(
   ],
 );
 
-export const modelAssets = sqliteTable(
+export const modelAssets = pgTable(
   'model_assets',
   {
     id: text('id').primaryKey(),
@@ -352,7 +353,7 @@ export const modelAssets = sqliteTable(
   ],
 );
 
-export const auditLogs = sqliteTable(
+export const auditLogs = pgTable(
   'audit_logs',
   {
     id: text('id').primaryKey(),

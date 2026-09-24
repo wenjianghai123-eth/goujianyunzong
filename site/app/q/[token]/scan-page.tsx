@@ -15,7 +15,7 @@ import { ModelViewer } from '@/app/model-viewer';
 import { createIdempotencyKey } from '@/lib/client-id';
 import { NEXT_STATUS, STATUS_LABELS, type ComponentDetail, type ComponentStatus } from '@/lib/domain';
 
-type Detail = ComponentDetail & { requireOnsitePhoto: number; requireCompletePhoto: number; milestones: Array<{ id: string; type: string; actualAt: string; operatorName: string; vehicleNo: string; receiver: string; location: string; remark: string }> };
+type Detail = ComponentDetail & { requireOnsitePhoto: boolean; requireCompletePhoto: boolean; milestones: Array<{ id: string; type: string; actualAt: string; operatorName: string; vehicleNo: string; receiver: string; location: string; remark: string }> };
 type FormSubmitEvent = { preventDefault(): void; currentTarget: HTMLFormElement };
 type Envelope<T> = { ok: true; data: T } | { ok: false; error: { message: string } };
 

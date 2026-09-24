@@ -1,7 +1,7 @@
-import { env } from 'cloudflare:workers';
 import { cookies } from 'next/headers';
 
 import { getChatGPTUser } from '@/app/chatgpt-auth';
+import { database } from '@/db';
 
 export const SESSION_COOKIE = 'goujian_session';
 export const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
@@ -14,25 +14,26 @@ export type AppUser = {
   provider: 'WECHAT' | 'CHATGPT';
 };
 
-export function authDatabase(): D1Database {
-  if (!env.DB) throw new Error('认证数据库暂不可用');
-  return env.DB;
-}
+export const authDatabase = database;
 
 export async function getCurrentUser(): Promise<AppUser | null> {
   const cookieStore = await cookies();
   const rawToken = cookieStore.get(SESSION_COOKIE)?.value;
   if (rawToken) {
     const sessionId = await hashToken(rawToken);
-    const user = await authDatabase()
-      .prepare(`
-        SELECT u.id AS userId, u.display_name AS displayName, u.avatar_url AS avatarUrl
+    const user = await authDatabase().one<{
+      userId: string;
+      displayName: string;
+      avatarUrl: string;
+    }>(
+      `
+        SELECT u.id AS "userId", u.display_name AS "displayName", u.avatar_url AS "avatarUrl"
         FROM auth_sessions s
         JOIN auth_users u ON u.id = s.user_id
-        WHERE s.id = ? AND s.expires_at > ?
-      `)
-      .bind(sessionId, new Date().toISOString())
-      .first<{ userId: string; displayName: string; avatarUrl: string }>();
+        WHERE s.id = $1 AND s.expires_at > $2
+      `,
+      [sessionId, new Date().toISOString()],
+    );
     if (user) return { ...user, email: '', provider: 'WECHAT' };
   }
 
@@ -89,5 +90,9 @@ export type WeChatRuntimeEnv = {
 };
 
 export function weChatRuntime(): WeChatRuntimeEnv {
-  return env as unknown as WeChatRuntimeEnv;
+  return {
+    WECHAT_APP_ID: process.env.WECHAT_APP_ID,
+    WECHAT_APP_SECRET: process.env.WECHAT_APP_SECRET,
+    WECHAT_REDIRECT_URI: process.env.WECHAT_REDIRECT_URI,
+  };
 }

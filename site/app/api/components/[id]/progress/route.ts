@@ -1,6 +1,6 @@
 import type { ComponentStatus } from '@/lib/domain';
 import { NEXT_STATUS, STATUSES } from '@/lib/domain';
-import { auditStatement } from '@/lib/repository';
+import { isConstraintError, writeAudit } from '@/lib/repository';
 import {
   cleanText,
   database,
@@ -18,33 +18,30 @@ export async function POST(request: Request, context: Context) {
   try {
     const actor = await requireActor();
     const { id } = await context.params;
-    const body = await request.json<Record<string, unknown>>();
+    const body = (await request.json()) as Record<string, unknown>;
     const toStatus = cleanText(body.toStatus, 30) as ComponentStatus;
     if (!STATUSES.includes(toStatus)) {
       throw new HttpError(400, '无效的目标进度');
     }
 
-    const component = await database()
-      .prepare(`
-        SELECT c.id, c.project_id AS projectId,
-          c.current_status AS currentStatus, c.version,
-          p.require_onsite_photo AS requireOnsitePhoto,
-          p.require_complete_photo AS requireCompletePhoto,
-          p.status AS projectStatus
-        FROM components c
-        JOIN projects p ON p.id = c.project_id
-        WHERE c.id = ? AND c.disabled_at IS NULL
-      `)
-      .bind(id)
-      .first<{
+    const component = await database().one<{
         id: string;
         projectId: string;
         currentStatus: ComponentStatus;
         version: number;
-        requireOnsitePhoto: number;
-        requireCompletePhoto: number;
+        requireOnsitePhoto: boolean;
+        requireCompletePhoto: boolean;
         projectStatus: string;
-      }>();
+      }>(`
+        SELECT c.id, c.project_id AS "projectId",
+          c.current_status AS "currentStatus", c.version,
+          p.require_onsite_photo AS "requireOnsitePhoto",
+          p.require_complete_photo AS "requireCompletePhoto",
+          p.status AS "projectStatus"
+        FROM components c
+        JOIN projects p ON p.id = c.project_id
+        WHERE c.id = $1 AND c.disabled_at IS NULL
+      `, [id]);
 
     if (!component) throw new HttpError(404, '未找到该构件');
     const membership = await requireProjectAccess(actor, component.projectId, 'write');
@@ -54,10 +51,10 @@ export async function POST(request: Request, context: Context) {
 
     const idempotencyKey = cleanText(body.idempotencyKey, 100);
     if (!idempotencyKey) throw new HttpError(400, '缺少防重复提交标识');
-    const duplicate = await database()
-      .prepare(`SELECT id, to_status AS toStatus FROM progress_records WHERE component_id = ? AND idempotency_key = ?`)
-      .bind(id, idempotencyKey)
-      .first<{ id: string; toStatus: ComponentStatus }>();
+    const duplicate = await database().one<{ id: string; toStatus: ComponentStatus }>(
+      `SELECT id, to_status AS "toStatus" FROM progress_records WHERE component_id = $1 AND idempotency_key = $2`,
+      [id, idempotencyKey],
+    );
     if (duplicate) {
       return jsonOk({ id: duplicate.id, duplicate: true, currentStatus: duplicate.toStatus });
     }
@@ -80,8 +77,8 @@ export async function POST(request: Request, context: Context) {
       ? body.photoIds.filter((item): item is string => typeof item === 'string').slice(0, 9)
       : [];
     const requiresPhoto =
-      (toStatus === 'ONSITE' && Boolean(component.requireOnsitePhoto)) ||
-      (toStatus === 'COMPLETED' && Boolean(component.requireCompletePhoto));
+      (toStatus === 'ONSITE' && component.requireOnsitePhoto) ||
+      (toStatus === 'COMPLETED' && component.requireCompletePhoto);
     if (requiresPhoto && photoIds.length === 0) {
       throw new HttpError(400, '该进度至少需要上传 1 张现场照片');
     }
@@ -94,37 +91,49 @@ export async function POST(request: Request, context: Context) {
     const recordId = makeId('progress');
     const now = new Date().toISOString();
     const remark = cleanText(body.remark, 1000);
-    const update = await database()
-      .prepare(`UPDATE components SET current_status = ?, version = version + 1, updated_at = ?, updated_by = ? WHERE id = ? AND version = ?`)
-      .bind(toStatus, now, actor.displayName, id, component.version)
-      .run();
-    if (!update.meta.changes) {
-      throw new HttpError(409, '该构件已被其他人更新，请刷新后重试');
+    try {
+      await database().transaction(async (tx) => {
+        const changed = await tx.execute(
+          `UPDATE components SET current_status = $1, version = version + 1, updated_at = $2, updated_by = $3 WHERE id = $4 AND version = $5`,
+          [toStatus, now, actor.displayName, id, component.version],
+        );
+        if (!changed) {
+          throw new HttpError(409, '该构件已被其他人更新，请刷新后重试');
+        }
+        await tx.execute(
+          `INSERT INTO progress_records (id, component_id, from_status, to_status, actual_at, submitted_at, operator_id, operator_name, operator_email, remark, idempotency_key, event_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'PROGRESS')`,
+          [recordId, id, component.currentStatus, toStatus, actualDate.toISOString(), now, actor.userId, actor.displayName, actor.email, remark, idempotencyKey],
+        );
+        await writeAudit(
+          tx,
+          request,
+          actor,
+          'PROGRESS_UPDATED',
+          'component',
+          id,
+          component.projectId,
+          { status: component.currentStatus, version: component.version },
+          { status: toStatus, version: component.version + 1, recordId },
+        );
+        for (const photoId of photoIds) {
+          await tx.execute(
+            `UPDATE photos SET progress_record_id = $1 WHERE id = $2 AND component_id = $3 AND progress_record_id IS NULL`,
+            [recordId, photoId, id],
+          );
+        }
+      });
+    } catch (error) {
+      if (isConstraintError(error)) {
+        const existing = await database().one<{ id: string; toStatus: ComponentStatus }>(
+          `SELECT id, to_status AS "toStatus" FROM progress_records WHERE component_id = $1 AND idempotency_key = $2`,
+          [id, idempotencyKey],
+        );
+        if (existing) {
+          return jsonOk({ id: existing.id, duplicate: true, currentStatus: existing.toStatus });
+        }
+      }
+      throw error;
     }
-
-    const statements: D1PreparedStatement[] = [
-      database()
-        .prepare(`INSERT INTO progress_records (id, component_id, from_status, to_status, actual_at, submitted_at, operator_id, operator_name, operator_email, remark, idempotency_key, event_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROGRESS')`)
-        .bind(recordId, id, component.currentStatus, toStatus, actualDate.toISOString(), now, actor.userId, actor.displayName, actor.email, remark, idempotencyKey),
-      auditStatement(
-        request,
-        actor,
-        'PROGRESS_UPDATED',
-        'component',
-        id,
-        component.projectId,
-        { status: component.currentStatus, version: component.version },
-        { status: toStatus, version: component.version + 1, recordId },
-      ),
-    ];
-    for (const photoId of photoIds) {
-      statements.push(
-        database()
-          .prepare(`UPDATE photos SET progress_record_id = ? WHERE id = ? AND component_id = ? AND progress_record_id IS NULL`)
-          .bind(recordId, photoId, id),
-      );
-    }
-    await database().batch(statements);
     return jsonOk({
       id: recordId,
       currentStatus: toStatus,

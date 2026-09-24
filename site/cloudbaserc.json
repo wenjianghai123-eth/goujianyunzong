@@ -1,0 +1,61 @@
+{
+  "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
+  "version": "2.1",
+  "envId": "goujianyunzong-pg-d8d7fzcb258b4d",
+  "functions": [
+    {
+      "name": "goujianyunzong",
+      "type": "HTTP",
+      "dir": ".",
+      "runtime": "Nodejs20.19",
+      "buildStrategy": "zip",
+      "memorySize": 512,
+      "timeout": 60,
+      "installDependency": true,
+      "public": true,
+      "envVariables": {
+        "NODE_ENV": "production",
+        "CLOUDBASE_ENV_ID": "goujianyunzong-pg-d8d7fzcb258b4d",
+        "CLOUDBASE_STORAGE_BUCKET": "goujianyunzong-files",
+        "PGHOST": "{{env.PGHOST}}",
+        "PGPORT": "{{env.PGPORT}}",
+        "PGDATABASE": "{{env.PGDATABASE}}",
+        "PGUSER": "{{env.PGUSER}}",
+        "PGPASSWORD": "{{env.PGPASSWORD}}",
+        "WECHAT_APP_ID": "{{env.WECHAT_APP_ID}}",
+        "WECHAT_APP_SECRET": "{{env.WECHAT_APP_SECRET}}",
+        "WECHAT_REDIRECT_URI": "{{env.WECHAT_REDIRECT_URI}}",
+        "CLOUDBASE_APIKEY": "{{env.CLOUDBASE_APIKEY}}"
+      },
+      "ignore": [
+        "node_modules",
+        "node_modules/**/*",
+        ".git",
+        ".git/**/*",
+        ".env",
+        ".env.*",
+        ".next/cache",
+        ".next/cache/**/*",
+        ".next/standalone",
+        ".next/standalone/**/*",
+        ".openai",
+        ".vinext",
+        ".wrangler",
+        "dist",
+        "outputs",
+        "tsconfig.tsbuildinfo",
+        "*.log"
+      ]
+    }
+  ],
+  "gateway": {
+    "routes": [
+      {
+        "path": "/",
+        "target": "function:goujianyunzong",
+        "enableAuth": false,
+        "enablePathTransmission": true
+      }
+    ]
+  }
+}

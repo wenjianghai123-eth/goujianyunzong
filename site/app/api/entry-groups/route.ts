@@ -1,5 +1,5 @@
 import { normalizeCodeSegment, normalizeSerialWidth } from '@/lib/entry-groups';
-import { auditStatement, isConstraintError } from '@/lib/repository';
+import { isConstraintError, writeAudit } from '@/lib/repository';
 import {
   cleanText,
   database,
@@ -18,25 +18,23 @@ export async function GET(request: Request) {
     const projectId = cleanText(new URL(request.url).searchParams.get('projectId'), 80);
     if (!projectId) throw new HttpError(400, '缺少项目参数');
     await requireProjectAccess(actor, projectId, 'read');
-    const result = await database()
-      .prepare(
-        `SELECT g.id, g.project_id AS projectId, g.type_code AS typeCode,
-          g.type_name AS typeName, g.location_code AS locationCode,
-          g.location_name AS locationName, g.building, g.floor, g.area,
-          g.specification, g.material, g.serial_width AS serialWidth,
-          g.qr_token AS qrToken, g.status, g.created_at AS createdAt,
-          g.updated_at AS updatedAt, g.created_by AS createdBy,
-          COUNT(c.id) AS componentCount,
-          COALESCE(SUM(CASE WHEN c.current_status IN ('ONSITE', 'COMPLETED') THEN 1 ELSE 0 END), 0) AS onsiteCount
+    const rows = await database().many(
+        `SELECT g.id, g.project_id AS "projectId", g.type_code AS "typeCode",
+          g.type_name AS "typeName", g.location_code AS "locationCode",
+          g.location_name AS "locationName", g.building, g.floor, g.area,
+          g.specification, g.material, g.serial_width AS "serialWidth",
+          g.qr_token AS "qrToken", g.status, g.created_at AS "createdAt",
+          g.updated_at AS "updatedAt", g.created_by AS "createdBy",
+          COUNT(c.id)::integer AS "componentCount",
+          COUNT(c.id) FILTER (WHERE c.current_status IN ('ONSITE', 'COMPLETED'))::integer AS "onsiteCount"
         FROM component_entry_groups g
         LEFT JOIN components c ON c.entry_group_id = g.id AND c.disabled_at IS NULL
-        WHERE g.project_id = ? AND g.status = 'ACTIVE'
+        WHERE g.project_id = $1 AND g.status = 'ACTIVE'
         GROUP BY g.id
         ORDER BY g.updated_at DESC`,
-      )
-      .bind(projectId)
-      .all();
-    return jsonOk(result.results);
+      [projectId],
+    );
+    return jsonOk(rows);
   } catch (error) {
     return jsonError(error);
   }
@@ -45,14 +43,11 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const actor = await requireActor();
-    const body = await request.json<Record<string, unknown>>();
+    const body = (await request.json()) as Record<string, unknown>;
     const projectId = cleanText(body.projectId, 80);
     if (!projectId) throw new HttpError(400, '缺少项目参数');
     await requireProjectAccess(actor, projectId, 'admin');
-    const project = await database()
-      .prepare(`SELECT status FROM projects WHERE id = ?`)
-      .bind(projectId)
-      .first<{ status: string }>();
+    const project = await database().one<{ status: string }>(`SELECT status FROM projects WHERE id = $1`, [projectId]);
     if (!project) throw new HttpError(404, '项目不存在');
     if (project.status !== 'ACTIVE') throw new HttpError(409, '项目已归档，不能创建进场二维码');
 
@@ -86,16 +81,14 @@ export async function POST(request: Request) {
       onsiteCount: 0,
     };
     try {
-      await database().batch([
-        database()
-          .prepare(
+      await database().transaction(async (tx) => {
+        await tx.execute(
             `INSERT INTO component_entry_groups (
               id, project_id, type_code, type_name, location_code, location_name,
               building, floor, area, specification, material, serial_width,
               qr_token, status, created_at, updated_at, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)`,
-          )
-          .bind(
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'ACTIVE', $14, $15, $16)`,
+          [
             id,
             projectId,
             typeCode,
@@ -112,9 +105,10 @@ export async function POST(request: Request) {
             now,
             now,
             actor.displayName,
-          ),
-        auditStatement(request, actor, 'ENTRY_GROUP_CREATED', 'entry_group', id, projectId, null, record),
-      ]);
+          ],
+        );
+        await writeAudit(tx, request, actor, 'ENTRY_GROUP_CREATED', 'entry_group', id, projectId, null, record);
+      });
     } catch (error) {
       if (isConstraintError(error)) {
         throw new HttpError(409, `${typeCode}-${locationCode} 的进场二维码已存在`);

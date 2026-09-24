@@ -19,16 +19,15 @@ export async function GET(request: Request) {
   const state = randomToken(24);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
-  await authDatabase().batch([
-    authDatabase()
-      .prepare(`DELETE FROM oauth_states WHERE expires_at <= ?`)
-      .bind(now.toISOString()),
-    authDatabase()
-      .prepare(
-        `INSERT INTO oauth_states (id, return_to, created_at, expires_at) VALUES (?, ?, ?, ?)`,
-      )
-      .bind(state, returnTo, now.toISOString(), expiresAt),
-  ]);
+  await authDatabase().transaction(async (tx) => {
+    await tx.execute(`DELETE FROM oauth_states WHERE expires_at <= $1`, [
+      now.toISOString(),
+    ]);
+    await tx.execute(
+      `INSERT INTO oauth_states (id, return_to, created_at, expires_at) VALUES ($1, $2, $3, $4)`,
+      [state, returnTo, now.toISOString(), expiresAt],
+    );
+  });
 
   const callback =
     runtime.WECHAT_REDIRECT_URI || `${requestUrl.origin}/auth/wechat/callback`;

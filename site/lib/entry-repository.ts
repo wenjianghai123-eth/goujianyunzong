@@ -34,33 +34,29 @@ export type SequencePreviewItem = {
 };
 
 const ENTRY_GROUP_SELECT = `
-  g.id, g.project_id AS projectId, p.name AS projectName,
-  p.status AS projectStatus, g.type_code AS typeCode, g.type_name AS typeName,
-  g.location_code AS locationCode, g.location_name AS locationName,
+  g.id, g.project_id AS "projectId", p.name AS "projectName",
+  p.status AS "projectStatus", g.type_code AS "typeCode", g.type_name AS "typeName",
+  g.location_code AS "locationCode", g.location_name AS "locationName",
   g.building, g.floor, g.area, g.specification, g.material,
-  g.serial_width AS serialWidth, g.qr_token AS qrToken, g.status,
-  g.created_at AS createdAt, g.updated_at AS updatedAt,
-  g.created_by AS createdBy
+  g.serial_width AS "serialWidth", g.qr_token AS "qrToken", g.status,
+  g.created_at AS "createdAt", g.updated_at AS "updatedAt",
+  g.created_by AS "createdBy"
 `;
 
 export async function getEntryGroup(id: string) {
-  const group = await database()
-    .prepare(
-      `SELECT ${ENTRY_GROUP_SELECT} FROM component_entry_groups g JOIN projects p ON p.id = g.project_id WHERE g.id = ?`,
-    )
-    .bind(id)
-    .first<EntryGroupRow>();
+  const group = await database().one<EntryGroupRow>(
+    `SELECT ${ENTRY_GROUP_SELECT} FROM component_entry_groups g JOIN projects p ON p.id = g.project_id WHERE g.id = $1`,
+    [id],
+  );
   if (!group) throw new HttpError(404, '未找到该批次进场二维码');
   return group;
 }
 
 export async function getEntryGroupByToken(token: string) {
-  const group = await database()
-    .prepare(
-      `SELECT ${ENTRY_GROUP_SELECT} FROM component_entry_groups g JOIN projects p ON p.id = g.project_id WHERE g.qr_token = ?`,
-    )
-    .bind(token)
-    .first<EntryGroupRow>();
+  const group = await database().one<EntryGroupRow>(
+    `SELECT ${ENTRY_GROUP_SELECT} FROM component_entry_groups g JOIN projects p ON p.id = g.project_id WHERE g.qr_token = $1`,
+    [token],
+  );
   if (!group) throw new HttpError(404, '二维码无效或已失效');
   return group;
 }
@@ -72,32 +68,28 @@ export async function buildSequencePreview(
   const codes = sequences.map((sequence) =>
     makeComponentCode(group.typeCode, group.locationCode, sequence, group.serialWidth),
   );
-  const rows = await database()
-    .prepare(
-      `SELECT id, code, entry_group_id AS entryGroupId, sequence_no AS sequenceNo,
-        current_status AS currentStatus, version, disabled_at AS disabledAt
+  const rows = await database().many<{
+    id: string;
+    code: string;
+    entryGroupId: string | null;
+    sequenceNo: number | null;
+    currentStatus: ComponentStatus;
+    version: number;
+    disabledAt: string | null;
+  }>(
+      `SELECT id, code, entry_group_id AS "entryGroupId", sequence_no AS "sequenceNo",
+        current_status AS "currentStatus", version, disabled_at AS "disabledAt"
       FROM components
-      WHERE project_id = ? AND (
-        code IN (SELECT value FROM json_each(?))
-        OR (entry_group_id = ? AND sequence_no IN (
-          SELECT CAST(value AS INTEGER) FROM json_each(?)
-        ))
+      WHERE project_id = $1 AND (
+        code = ANY($2::text[])
+        OR (entry_group_id = $3 AND sequence_no = ANY($4::integer[]))
       )`,
-    )
-    .bind(group.projectId, JSON.stringify(codes), group.id, JSON.stringify(sequences))
-    .all<{
-      id: string;
-      code: string;
-      entryGroupId: string | null;
-      sequenceNo: number | null;
-      currentStatus: ComponentStatus;
-      version: number;
-      disabledAt: string | null;
-    }>();
+    [group.projectId, codes, group.id, sequences],
+  );
 
   return sequences.map<SequencePreviewItem>((sequenceNo, index) => {
     const code = codes[index];
-    const matches = rows.results.filter(
+    const matches = rows.filter(
       (row) =>
         row.code === code ||
         (row.entryGroupId === group.id && row.sequenceNo === sequenceNo),
